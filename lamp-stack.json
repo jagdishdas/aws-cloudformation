@@ -1,0 +1,243 @@
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Description": "AWS CloudFormation template to deploy a LAMP stack using a single EC2 instance with Apache, PHP and MySQL.",
+
+  "Parameters": {
+    "KeyName": {
+      "Description": "Name of an existing EC2 KeyPair to enable SSH access",
+      "Type": "AWS::EC2::KeyPair::KeyName",
+      "Default": "whizlabs-key"
+    },
+
+    "DBName": {
+      "Description": "MySQL database name",
+      "Type": "String",
+      "Default": "MyDatabase",
+      "MinLength": "1",
+      "MaxLength": "64",
+      "AllowedPattern": "[a-zA-Z][a-zA-Z0-9]*"
+    },
+
+    "DBUser": {
+      "Description": "Username for MySQL database",
+      "Type": "String",
+      "MinLength": "1",
+      "MaxLength": "16",
+      "AllowedPattern": "[a-zA-Z][a-zA-Z0-9]*",
+      "NoEcho": true
+    },
+
+    "DBPassword": {
+      "Description": "Password for MySQL user",
+      "Type": "String",
+      "MinLength": "1",
+      "MaxLength": "41",
+      "AllowedPattern": "[a-zA-Z0-9]*",
+      "NoEcho": true
+    },
+
+    "DBRootPassword": {
+      "Description": "Root password for MySQL",
+      "Type": "String",
+      "MinLength": "1",
+      "MaxLength": "41",
+      "AllowedPattern": "[a-zA-Z0-9]*",
+      "NoEcho": true
+    },
+
+    "InstanceType": {
+      "Description": "EC2 instance type",
+      "Type": "String",
+      "Default": "t2.micro",
+      "AllowedValues": ["t2.micro"]
+    },
+
+    "SSHLocation": {
+      "Description": "CIDR IP range allowed to SSH",
+      "Type": "String",
+      "Default": "0.0.0.0/0",
+      "MinLength": "9",
+      "MaxLength": "18"
+    }
+  },
+
+  "Mappings": {
+    "AWSInstanceType2Arch": {
+      "t2.micro": {
+        "Arch": "HVM64"
+      }
+    },
+
+    "AWSRegionArch2AMI": {
+      "us-east-1": {
+        "HVM64": "ami-0080e4c5bc078760e"
+      }
+    }
+  },
+
+  "Resources": {
+
+    "WebServerSecurityGroup": {
+      "Type": "AWS::EC2::SecurityGroup",
+      "Properties": {
+        "GroupDescription": "Enable HTTP and SSH access",
+        "SecurityGroupIngress": [
+          {
+            "IpProtocol": "tcp",
+            "FromPort": "80",
+            "ToPort": "80",
+            "CidrIp": "0.0.0.0/0"
+          },
+          {
+            "IpProtocol": "tcp",
+            "FromPort": "22",
+            "ToPort": "22",
+            "CidrIp": { "Ref": "SSHLocation" }
+          }
+        ]
+      }
+    },
+
+    "WebServerInstance": {
+      "Type": "AWS::EC2::Instance",
+
+      "Metadata": {
+        "AWS::CloudFormation::Init": {
+
+          "configSets": {
+            "InstallAndRun": [
+              "Install",
+              "Configure"
+            ]
+          },
+
+          "Install": {
+
+            "packages": {
+              "yum": {
+                "httpd": [],
+                "php": [],
+                "php-mysql": [],
+                "mysql": [],
+                "mysql-server": []
+              }
+            },
+
+            "files": {
+
+              "/var/www/html/index.php": {
+                "content": {
+                  "Fn::Join": [
+                    "",
+                    [
+                      "<html><body>",
+                      "<h1>AWS CloudFormation LAMP Stack</h1>",
+                      "<?php echo 'Server running successfully!'; ?>",
+                      "</body></html>"
+                    ]
+                  ]
+                },
+                "mode": "000644",
+                "owner": "apache",
+                "group": "apache"
+              }
+
+            },
+
+            "services": {
+              "sysvinit": {
+                "httpd": {
+                  "enabled": "true",
+                  "ensureRunning": "true"
+                },
+                "mysqld": {
+                  "enabled": "true",
+                  "ensureRunning": "true"
+                }
+              }
+            }
+          },
+
+          "Configure": {
+
+            "commands": {
+
+              "01_set_mysql_root_password": {
+                "command": {
+                  "Fn::Join": [
+                    "",
+                    [
+                      "mysqladmin -u root password '",
+                      { "Ref": "DBRootPassword" },
+                      "'"
+                    ]
+                  ]
+                }
+              }
+
+            }
+          }
+
+        }
+      },
+
+      "Properties": {
+
+        "ImageId": {
+          "Fn::FindInMap": [
+            "AWSRegionArch2AMI",
+            { "Ref": "AWS::Region" },
+            { "Fn::FindInMap": [
+                "AWSInstanceType2Arch",
+                { "Ref": "InstanceType" },
+                "Arch"
+              ]
+            }
+          ]
+        },
+
+        "InstanceType": { "Ref": "InstanceType" },
+
+        "SecurityGroups": [
+          { "Ref": "WebServerSecurityGroup" }
+        ],
+
+        "KeyName": { "Ref": "KeyName" },
+
+        "UserData": {
+          "Fn::Base64": {
+            "Fn::Join": [
+              "",
+              [
+                "#!/bin/bash -xe\n",
+                "yum update -y\n",
+                "/opt/aws/bin/cfn-init -v ",
+                " --stack ", { "Ref": "AWS::StackName" },
+                " --resource WebServerInstance ",
+                " --configsets InstallAndRun ",
+                " --region ", { "Ref": "AWS::Region" }, "\n"
+              ]
+            ]
+          }
+        }
+      }
+    }
+  },
+
+  "Outputs": {
+
+    "WebsiteURL": {
+      "Description": "URL of the deployed website",
+      "Value": {
+        "Fn::Join": [
+          "",
+          [
+            "http://",
+            { "Fn::GetAtt": ["WebServerInstance", "PublicDnsName"] }
+          ]
+        ]
+      }
+    }
+
+  }
+}
